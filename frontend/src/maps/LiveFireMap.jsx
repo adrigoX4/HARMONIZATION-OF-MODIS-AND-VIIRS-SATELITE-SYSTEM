@@ -28,12 +28,18 @@ export default function LiveFireMap({ geojson, selectedDate }) {
       </div>
 
       <div className="map-container">
-        <MapContainer center={[28.8, 79.5]} zoom={6} style={{ height: '100%', width: '100%' }}>
+        <MapContainer center={[29.2, 77.8]} zoom={6} style={{ height: '100%', width: '100%' }}>
           <LayersControl position="topright">
-            <LayersControl.BaseLayer checked name="Dark Orbital Basemap">
+            <LayersControl.BaseLayer checked name="Dark Orbital Basemap (Esri)">
               <TileLayer
-                url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-                attribution="&copy; OpenStreetMap &copy; CARTO"
+                url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+                attribution="Tiles &copy; Esri"
+              />
+            </LayersControl.BaseLayer>
+            <LayersControl.BaseLayer name="OpenStreetMap Terrain">
+              <TileLayer
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution="&copy; OpenStreetMap contributors"
               />
             </LayersControl.BaseLayer>
             <LayersControl.BaseLayer name="NASA GIBS VIIRS True Color">
@@ -62,7 +68,7 @@ export default function LiveFireMap({ geojson, selectedDate }) {
                 pathOptions={{
                   color,
                   fillColor: color,
-                  fillOpacity: 0.76,
+                  fillOpacity: 0.78,
                   weight: p.sensor_family === 'MODIS' ? 2 : 1,
                 }}
               >

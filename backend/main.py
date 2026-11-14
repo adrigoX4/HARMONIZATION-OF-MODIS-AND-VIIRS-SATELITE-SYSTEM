@@ -1,3 +1,4 @@
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 import pandas as pd
@@ -6,14 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.calendar.aggregator import build_burning_calendar
 from backend.ml.features import build_cell_day_features
+from backend.ml.predictor import score_cell_day_anomalies
 
 app = FastAPI(
     title="NASA MODIS–VIIRS Fire Harmonization API",
     version="1.0.0",
-    description="Harmonized satellite fire detections, Dual-Layer Burning Calendar, and Anomaly Intelligence.",
+    description="Real multi-season MODIS + VIIRS satellite fire harmonization, Burning Calendar, and Calibrated Isolation Forest Anomaly Intelligence.",
 )
 
-# Allow local frontend dev server (React/Vite) to call this API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,40 +23,93 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-HARMONIZED_CSV = Path("data/processed/harmonized_sample.csv")
-PAIRS_CSV = Path("data/processed/matched_pairs_sample.csv")
+HISTORY_CSV = Path("data/processed/harmonized_history.csv")
+SAMPLE_HARMONIZED_CSV = Path("data/processed/harmonized_sample.csv")
+SAMPLE_PAIRS_CSV = Path("data/processed/matched_pairs_sample.csv")
 
 
-def _load_harmonized() -> pd.DataFrame:
-    if not HARMONIZED_CSV.exists():
+@lru_cache(maxsize=1)
+def _load_full_dataset() -> pd.DataFrame:
+    csv_path = HISTORY_CSV if HISTORY_CSV.exists() else SAMPLE_HARMONIZED_CSV
+    if not csv_path.exists():
         raise HTTPException(
             status_code=404,
-            detail="Processed data not found. Run 'python -m tests.test_harmonization' first.",
+            detail="Processed data not found. Run 'python -m backend.ingestion.run_ingestion' first.",
         )
-    return pd.read_csv(HARMONIZED_CSV)
+    return pd.read_csv(csv_path, low_memory=False)
 
 
-def _load_pairs() -> pd.DataFrame:
-    if not PAIRS_CSV.exists():
+def _get_active_window_df() -> pd.DataFrame:
+    """Returns the latest active season window (e.g., Nov 2026 NRT) for fast map & calendar rendering."""
+    df = _load_full_dataset()
+    if HISTORY_CSV.exists() and not df.empty:
+        # Focus default live dashboard on the latest 14-day NRT campaign (2026-11-01 onwards)
+        recent = df[df["utc_date"] >= "2026-11-01"]
+        if not recent.empty:
+            return recent
+    return df
+
+
+def _build_pairs_from_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Constructs cross-sensor MODIS-VIIRS paired cluster records directly from harmonized detections."""
+    if SAMPLE_PAIRS_CSV.exists() and not HISTORY_CSV.exists():
+        return pd.read_csv(SAMPLE_PAIRS_CSV)
+
+    matched = df[df["match_status"].isin(["Matched", "Possible Match"]) & df["match_id"].notna()].copy()
+    if matched.empty:
         return pd.DataFrame()
-    return pd.read_csv(PAIRS_CSV)
+
+    modis = matched[matched["sensor_family"] == "MODIS"].drop_duplicates(subset=["match_id"])
+    viirs = matched[matched["sensor_family"] == "VIIRS"].drop_duplicates(subset=["match_id"])
+    merged = pd.merge(
+        modis,
+        viirs,
+        on="match_id",
+        suffixes=("_modis", "_viirs"),
+        how="inner",
+    )
+    if merged.empty:
+        return pd.DataFrame()
+
+    pairs = pd.DataFrame({
+        "match_id": merged["match_id"],
+        "match_status": merged["match_status_modis"],
+        "utc_date": merged["utc_date_modis"],
+        "h3_index": merged["h3_index_modis"],
+        "modis_source_id": merged["source_id_modis"],
+        "viirs_source_id": merged["source_id_viirs"],
+        "modis_frp": merged["frp_modis"],
+        "viirs_frp": merged["frp_viirs"],
+        "distance_km": merged["nearest_dist_km_modis"].fillna(0.0).round(3),
+        "time_diff_min": merged["time_diff_min_modis"].fillna(0.0).round(1),
+    })
+    return pairs.sort_values(["utc_date", "viirs_frp"], ascending=[False, False]).reset_index(drop=True)
 
 
 @app.get("/")
 def root():
-    return {"status": "online", "service": "MODIS-VIIRS Harmonization Backend", "docs": "/docs"}
+    df = _load_full_dataset()
+    return {
+        "status": "online",
+        "service": "MODIS-VIIRS Harmonization Backend",
+        "dataset": "harmonized_history.csv (Real NASA FIRMS)" if HISTORY_CSV.exists() else "sample",
+        "total_historical_rows": int(len(df)),
+        "docs": "/docs",
+    }
 
 
 @app.get("/api/v1/dashboard")
 def get_dashboard_summary():
-    df = _load_harmonized()
-    pairs = _load_pairs()
+    df = _get_active_window_df()
+    full_df = _load_full_dataset()
+    pairs = _build_pairs_from_df(df)
 
     modis_df = df[df["sensor_family"] == "MODIS"]
     viirs_df = df[df["sensor_family"] == "VIIRS"]
 
     return {
         "total_observations": int(len(df)),
+        "total_historical_archive": int(len(full_df)),
         "modis_count": int(len(modis_df)),
         "viirs_count": int(len(viirs_df)),
         "paired_clusters": int(len(pairs)),
@@ -74,8 +128,10 @@ def get_fires_geojson(
     sensor: Optional[str] = Query(None, description="Filter by MODIS or VIIRS"),
     match_status: Optional[str] = Query(None, description="Filter by Matched, Possible Match, MODIS-only, VIIRS-only"),
     date: Optional[str] = Query(None, description="Filter by YYYY-MM-DD"),
+    limit: int = Query(2500, ge=100, le=10000, description="Max points returned for smooth map rendering"),
 ):
-    df = _load_harmonized()
+    # If user explicitly picks a historical date, search the entire 139k archive; otherwise use active NRT window
+    df = _load_full_dataset() if date else _get_active_window_df()
 
     if sensor:
         df = df[df["sensor_family"].str.upper() == sensor.upper()]
@@ -83,6 +139,10 @@ def get_fires_geojson(
         df = df[df["match_status"].str.lower() == match_status.lower()]
     if date:
         df = df[df["utc_date"] == date]
+
+    # Prioritize matched clusters and highest-FRP hotspots if capping points for browser map FPS
+    if len(df) > limit:
+        df = df.sort_values(by=["frp"], ascending=False).head(limit)
 
     features = []
     for _, row in df.iterrows():
@@ -117,8 +177,9 @@ def get_fires_geojson(
 
 
 @app.get("/api/v1/harmonization/matches")
-def get_harmonization_matches(limit: int = Query(50, ge=1, le=500)):
-    pairs = _load_pairs()
+def get_harmonization_matches(limit: int = Query(100, ge=1, le=500)):
+    df = _get_active_window_df()
+    pairs = _build_pairs_from_df(df)
     if pairs.empty:
         return {"count": 0, "matches": []}
 
@@ -131,7 +192,7 @@ def get_burning_calendar(
     start_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
     end_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
 ):
-    df = _load_harmonized()
+    df = _load_full_dataset() if (start_date or end_date) else _get_active_window_df()
     s_date = start_date or str(df["utc_date"].min())
     e_date = end_date or str(df["utc_date"].max())
 
@@ -143,9 +204,40 @@ def get_burning_calendar(
     }
 
 
+@app.get("/api/v1/anomalies")
+def get_calibrated_anomalies(
+    limit: int = Query(100, ge=1, le=500),
+    only_anomalies: bool = Query(False, description="Return only rows flagged by Isolation Forest"),
+):
+    df = _get_active_window_df()
+    try:
+        scored_df = score_cell_day_anomalies(df, only_anomalies=only_anomalies)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    if scored_df.empty:
+        return {"count": 0, "anomaly_count": 0, "anomalies": []}
+
+    tier_labels = {
+        "extreme": "Extreme Anomaly (≥ 99th pct)",
+        "anomalous": "Unusual vs. H3 Seasonal Baseline",
+        "elevated": "Elevated Thermal Activity",
+        "normal": "Within H3 Seasonal Baseline",
+    }
+    scored_df["baseline_label"] = scored_df["severity"].map(tier_labels).fillna("Within H3 Seasonal Baseline")
+
+    records = scored_df.head(limit).to_dict(orient="records")
+    return {
+        "count": len(records),
+        "total_cells": int(len(scored_df)),
+        "anomaly_count": int(scored_df["is_anomaly"].sum()),
+        "anomalies": records,
+    }
+
+
 @app.get("/api/v1/ml/features-preview")
 def get_ml_features_preview(limit: int = Query(20, ge=1, le=200)):
-    df = _load_harmonized()
+    df = _get_active_window_df()
     features_df = build_cell_day_features(df)
     return {
         "count": len(features_df),
