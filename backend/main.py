@@ -11,7 +11,7 @@ from backend.ml.predictor import score_cell_day_anomalies
 from backend.api.archive_routes import router as archive_router
 
 app = FastAPI(
-    title="NASA MODIS–VIIRS Fire Harmonization API",
+    title="FireWatch API (NASA MODIS and VIIRS fire harmonization)",
     version="1.0.0",
     description="Global multi-sensor MODIS + VIIRS satellite fire harmonization, Burning Calendar, and Calibrated Isolation Forest Anomaly Intelligence.",
 )

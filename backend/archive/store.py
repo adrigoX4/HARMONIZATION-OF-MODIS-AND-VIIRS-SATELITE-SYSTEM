@@ -285,12 +285,14 @@ def yearly_by_sensor(bbox_str: str) -> list[dict]:
     ]
 
 
-def hotspots_df(bbox_str: str, start: str, end: str, limit: int, sensor: str | None = None) -> pd.DataFrame:
+def hotspots_df(bbox_str: str, start: str, end: str, limit: int | None, sensor: str | None = None) -> pd.DataFrame:
+    """Raw detections in bbox/date range. `limit=None` returns every row."""
     bbox = parse_bbox(bbox_str)
     start, end = parse_date(start, "start"), parse_date(end, "end")
     con = _connect()
     _hotspots(con)
     sensor_filter = f" AND sensor_family = '{sensor.upper()}'" if sensor else ""
+    limit_sql = f"LIMIT {int(limit)}" if limit is not None else ""
     return con.execute(
         f"""
         SELECT latitude, longitude, h3_index, acq_datetime, acq_date, acq_time,
@@ -299,6 +301,6 @@ def hotspots_df(bbox_str: str, start: str, end: str, limit: int, sensor: str | N
         FROM hotspots
         WHERE {_where(bbox, start, end)}{sensor_filter}
         ORDER BY acq_datetime
-        LIMIT {int(limit)}
+        {limit_sql}
         """
     ).df()

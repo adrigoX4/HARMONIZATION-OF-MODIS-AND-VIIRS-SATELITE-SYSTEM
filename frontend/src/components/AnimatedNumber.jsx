@@ -1,35 +1,23 @@
 import React, { useEffect } from 'react'
-import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion'
+import { animate, motion, useMotionValue, useTransform } from 'framer-motion'
+import { fmtNum } from '../lib/format.js'
+import { EASE } from './motion.js'
 
 /**
- * Count-up number animation (V28-style data reveal).
- * Pass a numeric `value`; it springs from 0 to the target whenever the value changes.
- * `decimals` controls fixed-decimal formatting; non-numeric fallbacks render as-is.
+ * Tweens a figure from its previous value to the new one (no spring, no overshoot).
+ * Non-numeric values render as an em dash.
  */
-export default function AnimatedNumber({ value, decimals = 0, className, style }) {
-  const numeric = typeof value === 'number' && Number.isFinite(value) ? value : null
-
-  const motionValue = useMotionValue(0)
-  const spring = useSpring(motionValue, { stiffness: 90, damping: 22, mass: 0.8 })
-  const display = useTransform(spring, (v) =>
-    numeric === null ? String(value) : v.toFixed(decimals)
-  )
+export default function AnimatedNumber({ value, decimals = 0, className = '' }) {
+  const numeric = typeof value === 'number' && Number.isFinite(value)
+  const mv = useMotionValue(0)
+  const display = useTransform(mv, (v) => fmtNum(v, decimals))
 
   useEffect(() => {
-    if (numeric !== null) motionValue.set(numeric)
-  }, [numeric, motionValue])
+    if (!numeric) return
+    const controls = animate(mv, value, { duration: 0.5, ease: EASE })
+    return () => controls.stop()
+  }, [value, numeric, mv])
 
-  if (numeric === null) {
-    return (
-      <span className={className} style={style}>
-        {value}
-      </span>
-    )
-  }
-
-  return (
-    <motion.span className={className} style={style}>
-      {display}
-    </motion.span>
-  )
+  if (!numeric) return <span className={className}>n/a</span>
+  return <motion.span className={`tnum ${className}`}>{display}</motion.span>
 }
