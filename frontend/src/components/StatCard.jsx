@@ -1,6 +1,7 @@
 import React from 'react'
 import { motion } from 'framer-motion'
 import { ArrowUpRight } from 'lucide-react'
+import AnimatedNumber from './AnimatedNumber.jsx'
 
 export const cardVariants = {
   hidden: { opacity: 0, y: 18, scale: 0.98 },
@@ -12,6 +13,22 @@ export const cardVariants = {
   },
 }
 
+// Splits a string like "680.14 MW" into { numeric: 680.14, suffix: " MW", decimals: 2 }
+function splitNumeric(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return { numeric: value, suffix: '', decimals: 0 }
+  }
+  if (typeof value === 'string') {
+    const match = value.match(/^(-?[\d.]+)(.*)$/)
+    if (match) {
+      const numStr = match[1]
+      const decimals = numStr.includes('.') ? numStr.split('.')[1].length : 0
+      return { numeric: parseFloat(numStr), suffix: match[2], decimals }
+    }
+  }
+  return null
+}
+
 export default function StatCard({
   title,
   value,
@@ -20,6 +37,8 @@ export default function StatCard({
   hero = false,
   badge,
 }) {
+  const parts = splitNumeric(value)
+
   return (
     <motion.div
       variants={cardVariants}
@@ -31,7 +50,8 @@ export default function StatCard({
         <span className="card-sub" style={{ fontWeight: 600 }}>
           {title}
         </span>
-        <div
+        <motion.div
+          whileHover={{ rotate: 8, scale: 1.08 }}
           style={{
             width: 32,
             height: 32,
@@ -44,10 +64,19 @@ export default function StatCard({
           }}
         >
           {Icon ? <Icon size={16} /> : <ArrowUpRight size={16} />}
-        </div>
+        </motion.div>
       </div>
 
-      <div className="stat-value">{value}</div>
+      <div className="stat-value">
+        {parts ? (
+          <>
+            <AnimatedNumber value={parts.numeric} decimals={parts.decimals} />
+            {parts.suffix}
+          </>
+        ) : (
+          value
+        )}
+      </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.25rem' }}>
         <span className="card-sub">{subtitle}</span>

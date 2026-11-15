@@ -6,7 +6,12 @@ export default function HarmonizationPage({ matches = [], summary }) {
   const breakdown = summary?.match_breakdown || {}
 
   return (
-    <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -12, transition: { duration: 0.18 } }}
+      transition={{ duration: 0.25 }}
+    >
       <div className="grid-4">
         {Object.entries(breakdown).map(([status, count], idx) => (
           <StatCard

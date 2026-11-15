@@ -12,13 +12,14 @@ const containerVariants = {
     opacity: 1,
     transition: { staggerChildren: 0.065 },
   },
+  exit: { opacity: 0, y: -12, transition: { duration: 0.18 } },
 }
 
 export default function OverviewPage({ summary, geojson, calendarDays, onNavigate }) {
   const breakdown = summary?.match_breakdown || {}
 
   return (
-    <motion.div variants={containerVariants} initial="hidden" animate="visible">
+    <motion.div variants={containerVariants} initial="hidden" animate="visible" exit="exit">
       <div className="grid-4">
         <StatCard
           hero

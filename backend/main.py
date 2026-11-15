@@ -8,11 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.calendar.aggregator import build_burning_calendar
 from backend.ml.features import build_cell_day_features
 from backend.ml.predictor import score_cell_day_anomalies
+from backend.api.archive_routes import router as archive_router
 
 app = FastAPI(
     title="NASA MODIS–VIIRS Fire Harmonization API",
     version="1.0.0",
-    description="Real multi-season MODIS + VIIRS satellite fire harmonization, Burning Calendar, and Calibrated Isolation Forest Anomaly Intelligence.",
+    description="Global multi-sensor MODIS + VIIRS satellite fire harmonization, Burning Calendar, and Calibrated Isolation Forest Anomaly Intelligence.",
 )
 
 app.add_middleware(
@@ -22,6 +23,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(archive_router)
 
 HISTORY_CSV = Path("data/processed/harmonized_history.csv")
 SAMPLE_HARMONIZED_CSV = Path("data/processed/harmonized_sample.csv")
@@ -40,11 +43,10 @@ def _load_full_dataset() -> pd.DataFrame:
 
 
 def _get_active_window_df() -> pd.DataFrame:
-    """Returns the latest active season window (e.g., Nov 2026 NRT) for fast map & calendar rendering."""
+    """Returns the latest global active window (Nov 2026) for responsive dashboard & map rendering."""
     df = _load_full_dataset()
     if HISTORY_CSV.exists() and not df.empty:
-        # Focus default live dashboard on the latest 14-day NRT campaign (2026-11-01 onwards)
-        recent = df[df["utc_date"] >= "2026-11-01"]
+        recent = df[df["utc_date"] >= "2026-11-05"]
         if not recent.empty:
             return recent
     return df
@@ -91,18 +93,23 @@ def root():
     df = _load_full_dataset()
     return {
         "status": "online",
+        "coverage": "global",
         "service": "MODIS-VIIRS Harmonization Backend",
-        "dataset": "harmonized_history.csv (Real NASA FIRMS)" if HISTORY_CSV.exists() else "sample",
-        "total_historical_rows": int(len(df)),
+        "dataset": "harmonized_history.csv (Real Global NASA FIRMS)" if HISTORY_CSV.exists() else "sample",
+        "total_rows": int(len(df)),
         "docs": "/docs",
     }
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 @app.get("/api/v1/dashboard")
 def get_dashboard_summary():
     df = _get_active_window_df()
     full_df = _load_full_dataset()
-    pairs = _build_pairs_from_df(df)
 
     modis_df = df[df["sensor_family"] == "MODIS"]
     viirs_df = df[df["sensor_family"] == "VIIRS"]
@@ -112,7 +119,7 @@ def get_dashboard_summary():
         "total_historical_archive": int(len(full_df)),
         "modis_count": int(len(modis_df)),
         "viirs_count": int(len(viirs_df)),
-        "paired_clusters": int(len(pairs)),
+        "paired_clusters": int(df["match_id"].dropna().nunique()),
         "match_breakdown": df["match_status"].value_counts().to_dict(),
         "mean_frp_mw": round(float(df["frp"].mean()), 2) if not df.empty else 0.0,
         "max_frp_mw": round(float(df["frp"].max()), 2) if not df.empty else 0.0,
@@ -128,9 +135,8 @@ def get_fires_geojson(
     sensor: Optional[str] = Query(None, description="Filter by MODIS or VIIRS"),
     match_status: Optional[str] = Query(None, description="Filter by Matched, Possible Match, MODIS-only, VIIRS-only"),
     date: Optional[str] = Query(None, description="Filter by YYYY-MM-DD"),
-    limit: int = Query(2500, ge=100, le=10000, description="Max points returned for smooth map rendering"),
+    limit: int = Query(5000, ge=100, le=15000, description="Max global points returned for smooth map rendering"),
 ):
-    # If user explicitly picks a historical date, search the entire 139k archive; otherwise use active NRT window
     df = _load_full_dataset() if date else _get_active_window_df()
 
     if sensor:
@@ -140,9 +146,9 @@ def get_fires_geojson(
     if date:
         df = df[df["utc_date"] == date]
 
-    # Prioritize matched clusters and highest-FRP hotspots if capping points for browser map FPS
+    # Sample proportionally across all continents/latitude-longitude bands if capping points for browser map FPS
     if len(df) > limit:
-        df = df.sort_values(by=["frp"], ascending=False).head(limit)
+        df = df.sample(n=limit, random_state=42)
 
     features = []
     for _, row in df.iterrows():

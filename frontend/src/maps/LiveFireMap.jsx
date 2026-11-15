@@ -9,8 +9,15 @@ const STATUS_COLORS = {
   'VIIRS-only': '#ff5e3a',
 }
 
+const GIBS_TRUE_COLOR = (date) =>
+  `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`
+
+// GIBS reference labels are served on the GoogleMapsCompatible_Level13 matrix set
+const GIBS_REFERENCE_LABELS =
+  'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Reference_Labels_15m/default/GoogleMapsCompatible_Level13/{z}/{y}/{x}.png'
+
 export default function LiveFireMap({ geojson, selectedDate }) {
-  const gibsDate = selectedDate || '2026-11-10'
+  const gibsDate = selectedDate || '2026-11-02'
   const features = geojson?.features || []
 
   return (
@@ -23,32 +30,51 @@ export default function LiveFireMap({ geojson, selectedDate }) {
           </span>
         ))}
         <span style={{ color: '#94a3b8', marginLeft: 'auto' }}>
-          {features.length} thermal hotspots • Switch NASA GIBS True-Color imagery in top-right layer menu
+          {features.length} global thermal hotspots • Satellite basemap with NASA GIBS place labels
         </span>
       </div>
 
       <div className="map-container">
-        <MapContainer center={[29.2, 77.8]} zoom={6} style={{ height: '100%', width: '100%' }}>
+        <MapContainer center={[15, 12]} zoom={2} minZoom={2} worldCopyJump={true} style={{ height: '100%', width: '100%' }}>
           <LayersControl position="topright">
-            <LayersControl.BaseLayer checked name="Dark Orbital Basemap (Esri)">
+            <LayersControl.BaseLayer checked name="Satellite (Esri World Imagery)">
+              <TileLayer
+                url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                attribution="Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics"
+                maxZoom={19}
+              />
+            </LayersControl.BaseLayer>
+
+            <LayersControl.BaseLayer name={`NASA GIBS VIIRS True Color (${gibsDate})`}>
+              <TileLayer
+                url={GIBS_TRUE_COLOR(gibsDate)}
+                attribution="Imagery: NASA EOSDIS GIBS (VIIRS SNPP Corrected Reflectance)"
+                maxZoom={9}
+              />
+            </LayersControl.BaseLayer>
+
+            <LayersControl.BaseLayer name="Dark Orbital Basemap (Esri)">
               <TileLayer
                 url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
                 attribution="Tiles &copy; Esri"
               />
             </LayersControl.BaseLayer>
+
             <LayersControl.BaseLayer name="OpenStreetMap Terrain">
               <TileLayer
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution="&copy; OpenStreetMap contributors"
               />
             </LayersControl.BaseLayer>
-            <LayersControl.BaseLayer name="NASA GIBS VIIRS True Color">
+
+            <LayersControl.Overlay checked name="Place Labels & Borders (NASA GIBS)">
               <TileLayer
-                url={`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${gibsDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`}
-                attribution="NASA EOSDIS GIBS"
-                maxZoom={9}
+                url={GIBS_REFERENCE_LABELS}
+                attribution="Labels: NASA EOSDIS GIBS"
+                opacity={0.7}
+                zIndex={650}
               />
-            </LayersControl.BaseLayer>
+            </LayersControl.Overlay>
           </LayersControl>
 
           {features.map((feat, idx) => {
@@ -57,8 +83,8 @@ export default function LiveFireMap({ geojson, selectedDate }) {
             const color = STATUS_COLORS[p.match_status] || '#ff5e3a'
             const radius =
               p.sensor_family === 'MODIS'
-                ? Math.min(13, 6 + Math.sqrt(p.frp || 1) * 0.45)
-                : Math.min(9, 4 + Math.sqrt(p.frp || 1) * 0.35)
+                ? Math.min(14, 7 + Math.sqrt(p.frp || 1) * 0.5)
+                : Math.min(10, 4.5 + Math.sqrt(p.frp || 1) * 0.4)
 
             return (
               <CircleMarker
@@ -66,10 +92,11 @@ export default function LiveFireMap({ geojson, selectedDate }) {
                 center={[lat, lon]}
                 radius={radius}
                 pathOptions={{
-                  color,
+                  color: '#ffffff',
                   fillColor: color,
-                  fillOpacity: 0.78,
-                  weight: p.sensor_family === 'MODIS' ? 2 : 1,
+                  fillOpacity: 0.92,
+                  weight: 1.4,
+                  opacity: 0.9,
                 }}
               >
                 <Popup>

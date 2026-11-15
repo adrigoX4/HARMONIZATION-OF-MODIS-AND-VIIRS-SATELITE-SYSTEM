@@ -1,4 +1,5 @@
-﻿import os
+import ast
+import os
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,14 +14,15 @@ from backend.processing.normalize import normalize_firms_df
 
 load_dotenv()
 
-DEFAULT_BBOX = os.getenv("DEFAULT_BBOX", "75,25,85,32")
+DEFAULT_BBOX = os.getenv("DEFAULT_BBOX", "world")
 DATA_DIR = Path(os.getenv("DATA_DIR", "data"))
 PROCESSED_DIR = DATA_DIR / "processed"
 
-# Representative Northern India fire windows across seasons & years:
+# Representative multi-season fire windows across seasons & years:
 # - Post-monsoon crop residue burning (Oct-Nov)
 # - Pre-monsoon rabi harvest & Himalayan foothill forest fires (Apr-May)
 # - Recent NRT window (Nov 2026)
+# Overridden by GLOBAL_WINDOWS in .env (e.g. [("2026-11-12", "2026-11-14")] for global runs).
 HISTORICAL_WINDOWS = [
     ("2024-10-20", "2024-11-15"),  # 2024 post-monsoon stubble peak
     ("2025-04-15", "2025-05-10"),  # 2025 pre-monsoon fire season
@@ -28,6 +30,10 @@ HISTORICAL_WINDOWS = [
     ("2026-04-15", "2026-05-10"),  # 2026 pre-monsoon fire season
     ("2026-11-01", "2026-11-14"),  # 2026 recent NRT window
 ]
+
+_global_windows_raw = os.getenv("GLOBAL_WINDOWS")
+if _global_windows_raw:
+    HISTORICAL_WINDOWS = [tuple(w) for w in ast.literal_eval(_global_windows_raw)]
 
 
 def _iter_5day_chunks(start_str: str, end_str: str):
@@ -89,8 +95,8 @@ def compute_h3_baselines(harmonized_df: pd.DataFrame) -> pd.DataFrame:
             baseline_viirs_share=("viirs_count", lambda s: float(s.sum() / max(1, cell_day.loc[s.index, "total_detections"].sum()))),
         )
     )
+    baselines["baseline_mean_frp"] = baselines["baseline_mean_frp"].fillna(0.0)
     baselines["baseline_std_frp"] = baselines["baseline_std_frp"].fillna(0.0)
-    baselines["baseline_std_detections"] = baselines["baseline_std_detections"].fillna(0.0)
     return baselines
 
 

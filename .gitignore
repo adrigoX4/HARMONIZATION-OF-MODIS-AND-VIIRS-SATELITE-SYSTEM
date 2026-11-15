@@ -5,3 +5,9 @@ __pycache__/
 .vscode/
 data/
 !data/.gitkeep
+
+# Large archive data & temp folders (do not push to GitHub)
+data/raw/
+data/processed/archive/
+.tmp_frames2/
+*.parquet
