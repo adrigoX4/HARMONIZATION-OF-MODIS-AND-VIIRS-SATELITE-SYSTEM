@@ -31,7 +31,7 @@ const PAGE_META = {
 export default function App() {
   const [activeTab, setActiveTab] = useState('overview')
   const [regionId, setRegionId] = useState('world')
-  const [customBbox, setCustomBbox] = useState('2026-10-31')
+  const [customBbox, setCustomBbox] = useState('')
   const [isLiveMode, setIsLiveMode] = useState(false)
   const [selectedDate, setSelectedDate] = useState('2026-10-31')
   const [activeDate, setActiveDate] = useState('2026-10-31')
@@ -60,7 +60,7 @@ export default function App() {
   const [matches, setMatches] = useState([])
   const [seriesDays, setSeriesDays] = useState([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('2026-10-31')
+  const [error, setError] = useState('')
 
   const presetObj = REGION_PRESETS.find((r) => r.id === regionId) || REGION_PRESETS[0]
   const activeRegion =
