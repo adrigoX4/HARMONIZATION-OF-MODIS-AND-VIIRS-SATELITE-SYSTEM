@@ -1,0 +1,15 @@
+# FireWatch backend (FastAPI + DuckDB over the Parquet archive).
+# Lower bounds rather than exact pins so the same file installs on the
+# python:3.11-slim Docker image and on newer local Pythons.
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pandas>=2.2.0
+numpy>=1.26.0
+pyarrow>=15.0.0
+duckdb>=1.1.0
+h3>=4.1.0
+scikit-learn>=1.5.0
+joblib>=1.4.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+huggingface_hub>=0.26.0

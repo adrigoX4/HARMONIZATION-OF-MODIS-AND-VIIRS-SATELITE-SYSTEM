@@ -1,3 +1,6 @@
+import logging
+import os
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -16,15 +19,73 @@ app = FastAPI(
     description="Global multi-sensor MODIS + VIIRS satellite fire harmonization, Burning Calendar, and Calibrated Isolation Forest Anomaly Intelligence.",
 )
 
+logger = logging.getLogger("firewatch")
+
+# CORS: any origin by default (so any Vercel deployment / preview URL works).
+# Set CORS_ORIGINS to a comma-separated list to lock it down, e.g.
+#   CORS_ORIGINS=https://firewatch.vercel.app,http://localhost:5173
+_cors_env = os.getenv("CORS_ORIGINS", "*").strip()
+CORS_ORIGINS = ["*"] if _cors_env in ("", "*") else [o.strip() for o in _cors_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(archive_router)
+
+ARCHIVE_DIR = Path("data/processed/archive")
+ARCHIVE_SENTINEL = ARCHIVE_DIR / "monthly_scores.parquet"
+DEFAULT_ARCHIVE_DATASET = "adrigoX4/modis-viirs-fire-archive"
+
+
+def _ensure_archive_downloaded() -> None:
+    """Fetch the Parquet archive from the Hugging Face Dataset when it isn't on disk.
+
+    Local development already has data/processed/archive, so this is a no-op there.
+    On a fresh container (e.g. a Hugging Face Docker Space) it downloads the dataset
+    repo named by HF_ARCHIVE_DATASET into data/processed/archive. HF_TOKEN is picked
+    up automatically by huggingface_hub if the dataset is private.
+    """
+    if ARCHIVE_SENTINEL.exists():
+        return
+
+    repo_id = os.getenv("HF_ARCHIVE_DATASET", DEFAULT_ARCHIVE_DATASET).strip() or DEFAULT_ARCHIVE_DATASET
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        logger.warning("Archive missing and huggingface_hub is not installed; archive endpoints will return 503.")
+        return
+
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    logger.warning("Archive not found at %s; downloading dataset %s ...", ARCHIVE_DIR, repo_id)
+    try:
+        snapshot_download(repo_id=repo_id, repo_type="dataset", local_dir=str(ARCHIVE_DIR))
+    except Exception:  # keep the API up; archive routes report 503 until data exists
+        logger.exception("Archive download from %s failed", repo_id)
+        return
+    logger.warning("Archive download complete: %s", ARCHIVE_DIR)
+
+
+def _warm_archive_cache() -> None:
+    """Pre-compute the archive coverage scan (~30 s on the full archive) so the
+    first dashboard request doesn't pay for it. Runs in a background thread."""
+    try:
+        from backend.archive import store
+
+        store.coverage()
+        logger.warning("Archive cache warmed")
+    except Exception as exc:
+        logger.warning("Archive cache warm-up skipped: %s", exc)
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    _ensure_archive_downloaded()
+    threading.Thread(target=_warm_archive_cache, name="archive-warmup", daemon=True).start()
 
 HISTORY_CSV = Path("data/processed/harmonized_history.csv")
 SAMPLE_HARMONIZED_CSV = Path("data/processed/harmonized_sample.csv")

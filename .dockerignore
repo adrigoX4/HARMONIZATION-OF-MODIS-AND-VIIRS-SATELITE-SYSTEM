@@ -1,0 +1,14 @@
+# Keep the build context small: the image only needs requirements.txt,
+# backend/ and models/. The archive comes from the HF Dataset at runtime.
+.git
+.venv
+.env
+.claude
+.vscode
+data
+frontend
+tests
+**/__pycache__
+**/*.pyc
+*.parquet
+.tmp_frames2
