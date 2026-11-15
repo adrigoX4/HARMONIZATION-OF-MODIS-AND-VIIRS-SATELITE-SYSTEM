@@ -1,17 +1,17 @@
-﻿"""Archive-backed and Live Real-Time endpoints: global/regional + date-driven queries."""
+"""Archive-backed and Live Real-Time endpoints: global/regional + date-driven queries."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from pathlib import Path
 import math
+import os
 
-import duckdb
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, Response
 
 from backend.archive import store
+from backend.api.response_cache import bundle_cache, response_cache
 from backend.ingestion.firms_client import fetch_area_fires
 
 router = APIRouter(prefix="/api/v1/archive", tags=["archive"])
@@ -27,9 +27,6 @@ PRESETS = [
     {"id": "indonesia", "label": "Southeast Asia / Indonesia", "bbox": "95,-11,141,6"},
     {"id": "europe", "label": "Europe & Mediterranean", "bbox": "-25,34,45,72"},
 ]
-
-MONTHLY_SCORES = Path("data/processed/archive/monthly_scores.parquet")
-
 
 def _fail(exc: Exception) -> HTTPException:
     if isinstance(exc, store.ArchiveNotReady):
@@ -250,6 +247,7 @@ def get_presets():
 
 
 @router.get("/meta")
+@response_cache.cached
 def get_meta():
     try:
         return store.coverage()
@@ -258,6 +256,7 @@ def get_meta():
 
 
 @router.get("/summary")
+@response_cache.cached
 def get_summary(
     bbox: str = Query("-180,-90,180,90"),
     start: str = Query("2003-01-01"),
@@ -270,6 +269,7 @@ def get_summary(
 
 
 @router.get("/series")
+@response_cache.cached
 def get_series(
     bbox: str = Query("-180,-90,180,90"),
     start: str = Query("2003-01-01"),
@@ -283,6 +283,7 @@ def get_series(
 
 
 @router.get("/calendar")
+@response_cache.cached
 def get_calendar(
     bbox: str = Query("-180,-90,180,90"),
     year_from: int = Query(2003, ge=2003, le=2026),
@@ -315,8 +316,9 @@ def get_sensor_era(bbox: str = Query("-180,-90,180,90")):
 
 
 # Keyed on (bbox, date): a different date or region is always a fresh query.
-# Holds full days (up to ~100k rows each), so the cache is kept small.
-@lru_cache(maxsize=12)
+# Holds full days (up to ~100k rows each), so the cache is kept small, and
+# smaller still in remote (low-RAM) mode. ARCHIVE_DAY_CACHE overrides it.
+@lru_cache(maxsize=int(os.getenv("ARCHIVE_DAY_CACHE", "2" if store.REMOTE else "12")))
 def _cached_archive_harmonized(bbox: str, target_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     # No row cap: every detection for the day feeds the stats and the pairing.
     # (This used to be limit=25000 with ORDER BY acq_datetime, which silently kept
@@ -326,6 +328,7 @@ def _cached_archive_harmonized(bbox: str, target_date: str) -> tuple[pd.DataFram
 
 
 @router.get("/day-bundle")
+@bundle_cache.cached
 def get_archive_day_bundle(
     bbox: str = Query("-180,-90,180,90"),
     date: str | None = Query(None, description="YYYY-MM-DD; defaults to latest archive date"),
@@ -443,20 +446,9 @@ def get_live_firms_bundle(
     }
 
 
-@router.get("/anomalies")
-def get_archive_anomalies(
-    bbox: str = Query("-180,-90,180,90"),
-    year: int = Query(2025, ge=2003, le=2026),
-    limit: int = Query(80, ge=1, le=300),
-):
-    """Returns calibrated 20-year Isolation Forest H3 anomalies for the chosen region & year."""
-    if not MONTHLY_SCORES.exists():
-        raise HTTPException(status_code=503, detail="monthly_scores.parquet not found. Run backend.ml.train_archive.")
-
-    w, s, e, n = store.parse_bbox(bbox)
-    con = duckdb.connect()
-    con.execute("SET threads = 4")
-    rows = con.execute(
+def _query_anomalies(w: float, s: float, e: float, n: float, year: int, limit: int) -> pd.DataFrame:
+    return store.query(
+        ("scores", "cells"),
         f"""
         SELECT
             s.h3_index,
@@ -469,21 +461,38 @@ def get_archive_anomalies(
             s.viirs_count,
             s.frp_sum_mw,
             s.frp_max_mw,
-            s.frp_zscore,
-            s.count_zscore,
+            -- monthly_scores.parquet stores only the count z-score (count_z)
+            CAST(NULL AS DOUBLE) AS frp_zscore,
+            s.count_z AS count_zscore,
             s.anomaly_score,
             s.is_anomaly,
             s.severity
-        FROM read_parquet('{MONTHLY_SCORES.as_posix()}') s
-        JOIN read_parquet('data/processed/archive/h3_cells.parquet') c
+        FROM scores s
+        JOIN cells c
           ON s.h3_index = c.h3_index
         WHERE s.year = {int(year)}
           AND c.latitude BETWEEN {s} AND {n}
           AND c.longitude BETWEEN {w} AND {e}
         ORDER BY s.anomaly_score DESC
         LIMIT {int(limit)}
-        """
-    ).df()
+        """,
+        "df",
+    )
+
+
+@router.get("/anomalies")
+@response_cache.cached
+def get_archive_anomalies(
+    bbox: str = Query("-180,-90,180,90"),
+    year: int = Query(2025, ge=2003, le=2026),
+    limit: int = Query(80, ge=1, le=300),
+):
+    """Returns calibrated 20-year Isolation Forest H3 anomalies for the chosen region & year."""
+    try:
+        w, s, e, n = store.parse_bbox(bbox)
+        rows = _query_anomalies(w, s, e, n, year, limit)
+    except Exception as exc:
+        raise _fail(exc)
 
     items = []
     for _, r in rows.iterrows():
