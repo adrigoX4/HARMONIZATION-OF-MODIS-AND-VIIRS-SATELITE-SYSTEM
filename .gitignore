@@ -11,3 +11,13 @@ data/raw/
 data/processed/archive/
 .tmp_frames2/
 *.parquet
+
+.env
+data/raw/
+data/processed/
+.venv/
+frontend/node_modules/
+
+__pycache__/
+*.pyc
+.claude/
